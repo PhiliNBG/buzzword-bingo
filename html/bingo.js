@@ -1,97 +1,88 @@
 $(function () {
-    var URL_PREFIX = location.protocol + '//' + location.hostname +
-        (location.port ? ':' + location.port : '');
-    var g_username;
-    var g_uid;
-    var g_grid_size = 5;
+    var URL_PREFIX = location.protocol + '//' + location.hostname + (location.port ? ':' + location.port : '');
+    var g_username, g_uid, g_grid_size = 5;
 
-    var createBingoCard = function (username, board) {
-        var $player = $('<div class="bingo-player col-lg-6 col-sm-12">');
+    var createBingoCard = function (username, board, isOwnCard) {
+        var $player = $('<div class="bingo-player">').addClass(isOwnCard ? 'own-card' : 'other-card');
         var $card = $('<div class="bingo-card grid-' + g_grid_size + '">');
+
         for (var i = 0; i < board.length; i++) {
             var $cell = $('<div class="bingo-cell">');
-            $cell.append($('<div>').text(board[i].phrase));
+            // Only show words on your own card, not on other players' cards
+            if (isOwnCard) {
+                $cell.append($('<div>').text(board[i].phrase));
+            } else {
+                $cell.append($('<div>'));
+            }
             if (board[i].marked) {
                 $cell.addClass('marked');
             }
             $card.append($cell);
         }
-        $player.append('<h2>' + username + '</h2>');
-        $player.append($card);
+
+        $player.append('<h2>' + username + '</h2>').append($card);
         return $player;
     };
 
     var refreshGame = function () {
-        $.get(URL_PREFIX + '/game',
-            {
-                uid: g_uid
-            },
-            function (data) {
-                if (data.hasOwnProperty('error')) {
-                    alert(data.error);
-                } else {
-                    $('#topic span').text(data.topic);
-                    $('#topic').show();
-                    var $bingo = $('#bingo');
-                    $bingo.empty();
-                    // Determine grid size from first player's board
-                    if (data.players.length > 0 && data.players[0].bingo_board) {
-                        g_grid_size = Math.round(Math.sqrt(data.players[0].bingo_board.length));
-                    }
-                    // Add me first for consistency.
-                    for (var i = 0; i < data.players.length; i++) {
-                        var player = data.players[i];
-                        if (player.username == g_username) {
-                            var $card = createBingoCard(player.username, player.bingo_board);
-                            $bingo.append($card);
-                        }
-                    }
-                    // Now add everyone else.
-                    for (var i = 0; i < data.players.length; i++) {
-                        var player = data.players[i];
-                        if (player.username != g_username) {
-                            var $card = createBingoCard(player.username, player.bingo_board);
-                            $bingo.append($card);
-                        }
-                    }
+        $.get(URL_PREFIX + '/game', { uid: g_uid }, function (data) {
+            if (data.error) {
+                alert(data.error);
+                return;
+            }
+            
+            $('#topic span').text(data.topic);
+            $('#topic').show();
+            $('#bingo').empty();
+            
+            if (data.players.length > 0) {
+                g_grid_size = Math.round(Math.sqrt(data.players[0].bingo_board.length));
+            }
+            
+            // Add your card first
+            data.players.forEach(function (player) {
+                if (player.username === g_username) {
+                    $('#bingo').append(createBingoCard(player.username, player.bingo_board, true));
                 }
-            },
-            'json'
-        );
+            });
+            
+            // Add other players
+            var others = data.players.filter(function (p) { return p.username !== g_username; });
+            
+            if (others.length > 0) {
+                var $container = $('<div class="other-players-container">')
+                    .append('<div class="other-players-header">Other Players (' + others.length + ')</div>');
+                
+                others.forEach(function (player) {
+                    $container.append(createBingoCard(player.username, player.bingo_board, false));
+                });
+                
+                $('#bingo').append($container);
+            } else {
+                $('#bingo').append('<div class="no-other-players">No other players yet. Share the room code!</div>');
+            }
+        });
     };
 
-    var scheduleRefresh = function () {
-        refreshGame();
-        setInterval(refreshGame, 3000);
-    };
-
-    // Join a game.
     $('#joinForm').submit(function (evt) {
         evt.preventDefault();
-        username = $('#joinUsername').val();
-        room = $('#joinRoom').val();
-        $.get(URL_PREFIX + '/join',
-            {
-                username: username,
-                room: room
-            },
-            function (data) {
-                if (data.hasOwnProperty('error')) {
-                    alert(data.error);
-                } else {
-                    g_uid = data.uid;
-                    g_username = username;
-                    $('#join').hide();
-                    $('#uid span').text(g_uid);
-                    $('#uid').show();
-                    scheduleRefresh();
-                }
-            },
-            'json'
-        );
+        g_username = $('#joinUsername').val();
+        var room = $('#joinRoom').val();
+        
+        $.get(URL_PREFIX + '/join', { username: g_username, room: room }, function (data) {
+            if (data.error) {
+                alert(data.error);
+            } else {
+                g_uid = data.uid;
+                $('#join').hide();
+                $('#uid span').text(g_uid);
+                $('#uid').show();
+                refreshGame();
+                setInterval(refreshGame, 3000);
+            }
+        });
     });
 
-    // Rejoin a game.
     $('#rejoinForm').submit(function (evt) {
         evt.preventDefault();
         g_username = $('#rejoinUsername').val();
@@ -99,28 +90,21 @@ $(function () {
         $('#join').hide();
         $('#uid span').text(g_uid);
         $('#uid').show();
-        scheduleRefresh();
+        refreshGame();
+        setInterval(refreshGame, 3000);
     });
 
-    // Bind to first bingo card and allow clicking.
-    $('#bingo').delegate('.bingo-player:first-child .bingo-cell', 'click', function (evt) {
+    $('#bingo').delegate('.bingo-player.own-card .bingo-cell', 'click', function () {
         var $cell = $(this);
-        var cell = $(this).index();
-        var marked = !$(this).hasClass('marked');
-        $.get(URL_PREFIX + '/cell',
-            {
-                uid: g_uid,
-                cell: cell,
-                marked: marked
-            },
-            function (data) {
-                if (data.hasOwnProperty('error')) {
-                    alert(data.error);
-                } else {
-                    $cell.toggleClass('marked', data.marked);
-                }
-            },
-            'json'
-        );
+        var cell = $cell.index();
+        var marked = !$cell.hasClass('marked');
+        
+        $.get(URL_PREFIX + '/cell', { uid: g_uid, cell: cell, marked: marked }, function (data) {
+            if (data.error) {
+                alert(data.error);
+            } else {
+                $cell.toggleClass('marked', data.marked);
+            }
+        });
     });
 });
